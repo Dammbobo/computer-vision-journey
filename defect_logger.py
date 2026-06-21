@@ -1,0 +1,156 @@
+import cv2
+import numpy as np
+import os
+from datetime import datetime
+
+cap = cv2.VideoCapture(0)
+
+# Quality standards
+GOOD_COLOR_LOWER = np.array([35, 50, 50])
+GOOD_COLOR_UPPER = np.array([85, 255, 255])
+MIN_AREA = 1000
+MAX_AREA = 50000
+EXPECTED_CORNERS = 4
+
+# Production counters
+total_inspected = 0
+total_passed = 0
+total_failed = 0
+last_status = None
+
+# Create folders to save images
+SAVE_DIR = "quality_control_logs"
+DEFECT_DIR = os.path.join(SAVE_DIR, "defects")
+PASS_DIR = os.path.join(SAVE_DIR, "passed")
+
+os.makedirs(DEFECT_DIR, exist_ok=True)
+os.makedirs(PASS_DIR, exist_ok=True)
+
+print(f"Saving logs to: {SAVE_DIR}")
+print("Quality Control Logger Running! Press 'q' to quit")
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    display = frame.copy()
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    color_mask = cv2.inRange(hsv, GOOD_COLOR_LOWER, GOOD_COLOR_UPPER)
+
+    contours, _ = cv2.findContours(
+        color_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    current_status = None
+    current_defects = []
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < MIN_AREA or area > MAX_AREA:
+            continue
+
+        approx = cv2.approxPolyDP(
+            cnt,
+            0.04 * cv2.arcLength(cnt, True),
+            True
+        )
+        corners = len(approx)
+        x, y, w, h = cv2.boundingRect(cnt)
+        cx = x + w // 2
+        cy = y + h // 2
+        aspect_ratio = w / h
+
+        defects = []
+        if corners != EXPECTED_CORNERS:
+            defects.append(f"Shape:{corners}corners")
+        if area < MIN_AREA * 1.5:
+            defects.append("Size:small")
+        elif area > MAX_AREA * 0.8:
+            defects.append("Size:large")
+        if aspect_ratio < 0.5 or aspect_ratio > 2.0:
+            defects.append("Shape:deformed")
+
+        if len(defects) == 0:
+            current_status = "PASS"
+            color = (0, 255, 0)
+        else:
+            current_status = "FAIL"
+            color = (0, 0, 255)
+            current_defects = defects
+
+        cv2.rectangle(display, (x, y), (x+w, y+h), color, 2)
+        cv2.circle(display, (cx, cy), 5, color, -1)
+        cv2.putText(display, current_status,
+                   (x, y - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+        for i, defect in enumerate(defects):
+            cv2.putText(display, defect,
+                       (x, y + h + 20 + (i * 20)),
+                       cv2.FONT_HERSHEY_SIMPLEX,
+                       0.5, (0, 0, 255), 1)
+
+    # Save image when status changes
+    if current_status is not None and current_status != last_status:
+        total_inspected += 1
+
+        # Generate timestamp for filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+        if current_status == "PASS":
+            total_passed += 1
+            filename = f"PASS_{timestamp}.jpg"
+            save_path = os.path.join(PASS_DIR, filename)
+            cv2.imwrite(save_path, display)
+            print(f"PASS saved: {filename}")
+        else:
+            total_failed += 1
+            defect_text = "_".join(current_defects)
+            filename = f"FAIL_{defect_text}_{timestamp}.jpg"
+            save_path = os.path.join(DEFECT_DIR, filename)
+            cv2.imwrite(save_path, display)
+            print(f"FAIL saved: {filename}")
+
+        last_status = current_status
+
+    # Calculate pass rate
+    pass_rate = (total_passed / total_inspected * 100) if total_inspected > 0 else 0
+
+    # Dashboard
+    cv2.rectangle(display, (0, 0), (300, 170), (0, 0, 0), -1)
+    cv2.rectangle(display, (0, 0), (300, 170), (255, 255, 255), 1)
+    cv2.putText(display, "QUALITY CONTROL LOGGER",
+               (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+               0.6, (255, 255, 255), 2)
+    cv2.putText(display, f"Inspected: {total_inspected}",
+               (10, 55), cv2.FONT_HERSHEY_SIMPLEX,
+               0.6, (255, 255, 255), 1)
+    cv2.putText(display, f"Passed: {total_passed}",
+               (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+               0.6, (0, 255, 0), 1)
+    cv2.putText(display, f"Failed: {total_failed}",
+               (10, 105), cv2.FONT_HERSHEY_SIMPLEX,
+               0.6, (0, 0, 255), 1)
+    cv2.putText(display, f"Pass Rate: {pass_rate:.1f}%",
+               (10, 130), cv2.FONT_HERSHEY_SIMPLEX,
+               0.6, (0, 255, 0) if pass_rate >= 80 else (0, 0, 255), 1)
+    cv2.putText(display, f"Logs: {SAVE_DIR}",
+               (10, 155), cv2.FONT_HERSHEY_SIMPLEX,
+               0.4, (200, 200, 200), 1)
+
+    cv2.imshow("Quality Control Logger", display)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+print(f"\nSession complete!")
+print(f"Total inspected: {total_inspected}")
+print(f"Total passed: {total_passed}")
+print(f"Total failed: {total_failed}")
+print(f"Final pass rate: {pass_rate:.1f}%")
+print(f"Images saved to: {SAVE_DIR}")
